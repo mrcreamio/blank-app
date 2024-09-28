@@ -82,7 +82,7 @@ def generate_signature(access_key, secret_key, method, uri, query_params):
 
 
 # Define default page size
-page_size = 20
+page_size = 200
 
 # Streamlit app
 st.title("API Signature and Request Generator")
@@ -94,6 +94,22 @@ site_uid = st.text_input("Site UID", value="b35a79ae-772e-44da-8fd2-d57d456d5442
 base_url = st.text_input("Base URL", value="https://api.dinetime.com")
 endpoint = f"/Site/{site_uid}/Metrics/SpeedOfService"
 method = 'GET'
+Token = None
+
+def get_speed_of_service():
+    """
+    Get the speed of service data.
+    """
+    # Headers
+    headers = {
+        'Authorization': f'dinetime-sv2-hmac-sha1 Algorithm=SHA256&Credentials={access_key}&Signature={signature}&Token={Token}',
+        'x-dinetime-timestamp': timestamp,
+        'x-dinetime-signature-version': 'dinetime-sv2-hmac-sha1',
+        'Accept': '*/*',
+        'User-Agent': 'PythonApp'
+    }
+    response = requests.get(f"{base_url}{endpoint}", headers=headers, params=params)
+    return response
 
 # Date selection
 start_date = st.date_input("Start Date", value=datetime.now().date())
@@ -119,42 +135,24 @@ if 'page_num' not in st.session_state:
 # Generate signature and make API request
 if st.button("Generate Signature and Send Request"):
     timestamp, signature = generate_signature(access_key, secret_key, method, endpoint, params)
-
-    # Headers
-    headers = {
-        'Authorization': f'dinetime-sv2-hmac-sha1 Algorithm=SHA256&Credentials={access_key}&Signature={signature}',
-        'x-dinetime-timestamp': timestamp,
-        'x-dinetime-signature-version': 'dinetime-sv2-hmac-sha1',
-        'Accept': '*/*',
-        'User-Agent': 'PythonApp'
-    }
-
-    # Make the API request
-    try:
-        response = requests.get(f"{base_url}{endpoint}", headers=headers, params=params)
-
-        # Display the results
-        st.write("Final URL:", response.url)
-        st.write("Response Status Code:", response.status_code)
-
-        # Display the response as a table if it's in JSON format
-        try:
+    has_more = True
+    while has_more:
+        response = get_speed_of_service()
+     
+        if response.status_code == 200:
             data = response.json()
-
-            # Check if 'PageData' exists and contains data
             if 'PageData' in data and isinstance(data['PageData'], list):
-                
-                st.session_state['page_data'] = pd.json_normalize(data['PageData'])
-            else:
-                st.write("No 'PageData' found in the response.")
-                st.session_state['page_data'] = None
-        except ValueError:
-            st.write("Response Text:", response.text)
+                Token = data.get('Token', None)
+                new_data = pd.json_normalize(data['PageData'])
+                st.session_state['page_data'] = new_data if st.session_state['page_data'] is None else pd.concat([st.session_state['page_data'], new_data])
+              
+                    # Call the API again to get the next page
+            print(f'HasMore: {data.get("HasMore")}')
+            has_more = data.get('HasMore', False)
+        else:
+            st.write("No 'PageData' found in the response.")
             st.session_state['page_data'] = None
-
-    except requests.exceptions.RequestException as e:
-        st.write(f"An error occurred: {e}")
-        st.session_state['page_data'] = None
+            has_more = False
 
 # If data is available, display the column selector and the table
 if st.session_state['page_data'] is not None:
@@ -174,7 +172,7 @@ if st.session_state['page_data'] is not None:
     paginated_data = paginate_data(df, page_size, st.session_state['page_num'])
 
     # Convert the paginated dataframe to CSV
-    csv_data = convert_df_to_csv(paginated_data[selected_columns])    
+    csv_data = convert_df_to_csv(df)    
     
     # Download button to save the data as a CSV file
     st.download_button(
