@@ -5,6 +5,7 @@ import streamlit as st
 from datetime import datetime, timezone
 import urllib.parse
 import pandas as pd
+import io
 
 # Helper functions
 def canonical_url_encode(url):
@@ -13,6 +14,27 @@ def canonical_url_encode(url):
     """
     encoded = urllib.parse.quote(url, safe='')
     return encoded
+
+def paginate_data(data, page_size, page_num):
+    """
+    Paginates the data based on the page size and page number.
+    """
+    page_size = page_size
+    if page_size is None:
+        return None
+
+    offset = page_size * (page_num - 1)
+
+    return data[offset:offset + page_size]
+
+
+def convert_df_to_csv(dataframe):
+    """
+    Converts a DataFrame to a CSV string.
+    """
+    csv_buffer = io.StringIO()
+    dataframe.to_csv(csv_buffer, index=False, encoding='utf-8-sig')
+    return csv_buffer.getvalue()
 
 def double_encode(s):
     """
@@ -58,6 +80,10 @@ def generate_signature(access_key, secret_key, method, uri, query_params):
 
     return timestamp, signature
 
+
+# Define default page size
+page_size = 20
+
 # Streamlit app
 st.title("API Signature and Request Generator")
 
@@ -85,6 +111,10 @@ params = [
 # Initialize session state to store the data
 if 'page_data' not in st.session_state:
     st.session_state['page_data'] = None
+    
+# Initialize page number in session state
+if 'page_num' not in st.session_state:
+    st.session_state['page_num'] = 1
 
 # Generate signature and make API request
 if st.button("Generate Signature and Send Request"):
@@ -113,6 +143,7 @@ if st.button("Generate Signature and Send Request"):
 
             # Check if 'PageData' exists and contains data
             if 'PageData' in data and isinstance(data['PageData'], list):
+                
                 st.session_state['page_data'] = pd.json_normalize(data['PageData'])
             else:
                 st.write("No 'PageData' found in the response.")
@@ -135,8 +166,58 @@ if st.session_state['page_data'] is not None:
         "Select columns to display", options=all_columns, default=all_columns
     )
 
-    # Display the DataFrame with the selected columns
+    # Pagination controls
+    total_pages = (len(df) + page_size - 1) // page_size  # Total pages required
+    page_num = st.session_state['page_num']
+
+    # Paginate the data
+    paginated_data = paginate_data(df, page_size, st.session_state['page_num'])
+
+    # Convert the paginated dataframe to CSV
+    csv_data = convert_df_to_csv(paginated_data[selected_columns])    
+    
+    # Download button to save the data as a CSV file
+    st.download_button(
+        label="Download Data as CSV",
+        data=csv_data,
+        file_name="data.csv",
+        mime="text/csv",
+    )
+    
+    # Display the paginated DataFrame with the selected columns
     if selected_columns:
-        st.table(df[selected_columns])
+        st.table(paginated_data[selected_columns])
     else:
         st.write("No columns selected to display.")
+        
+    # Adjust column layout for proper alignment
+    pagination_cols = st.columns([1, 6, 1])  # Adjusted for proper alignment
+
+    # First and Last buttons and page number buttons
+    with pagination_cols[0]:
+        if st.button("First"):
+            st.session_state['page_num'] = 1
+
+    # Center section for displaying page number buttons
+    with pagination_cols[1]:
+        page_buttons = st.empty()  
+
+        # Show up to 5 page buttons at a time
+        max_pages_display = 5
+        start_page = max(1, page_num - max_pages_display // 2)
+        end_page = min(total_pages, start_page + max_pages_display - 1)
+
+        # Adjust start_page if end_page is too close to the total pages
+        if end_page - start_page + 1 < max_pages_display:
+            start_page = max(1, end_page - max_pages_display + 1)
+
+        # Create page buttons dynamically
+        button_row = st.columns(min(len(range(start_page, end_page + 1)), 5))  # Up to 5 buttons
+        for i, page_num_button in enumerate(range(start_page, end_page + 1)):
+            with button_row[i]:
+                if st.button(f"{page_num_button}"):
+                    st.session_state['page_num'] = page_num_button
+
+    with pagination_cols[2]:
+        if st.button("Last"):
+            st.session_state['page_num'] = total_pages
